@@ -92,11 +92,11 @@ def wait_for_health(address: str, timeout: float = 15.0) -> None:
     raise RuntimeError("下载服务启动超时")
 
 
-def submit(address: str, payload: dict) -> dict:
-    """按 reqable 脚本的方式提交视频信息."""
+def submit(address: str, path: str, payload: dict) -> dict:
+    """按 reqable 脚本的方式提交内容."""
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
-        f"http://{address}/upload-video-info",
+        f"http://{address}{path}",
         data=body,
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
@@ -159,6 +159,7 @@ def run() -> int:
 
             response = submit(
                 address,
+                "/upload-video-info",
                 {
                     "code": 0,
                     "msg": "",
@@ -180,10 +181,23 @@ def run() -> int:
                 raise RuntimeError(f"分片目录内容异常: {segments}")
             print(f"[smoke] 分片目录校验通过: {segments}")
 
+            # 新接口只给地址与标题时走直传通道, 标题不带后缀, 由服务端补默认容器后缀.
+            direct = submit(
+                address,
+                "/upload-video-url",
+                {"url": f"http://{cdn_address}/playlist.m3u8?sign=direct", "name": "第四讲 SPI 与 I2C"},
+            )
+            print(f"[smoke] 直传结果: {direct}")
+            if direct.get("code") != 0:
+                raise RuntimeError(f"直传任务失败: {direct}")
+
+            wait_for_output(output_dir / "videos" / "第四讲 SPI 与 I2C.mp4")
+            print("[smoke] 直传通道成片校验通过")
+
             meta_files = list((output_dir / "meta").glob("*.json"))
-            if len(meta_files) != 1:
+            if len(meta_files) != 2:
                 raise RuntimeError(f"元数据文件数量异常: {meta_files}")
-            print(f"[smoke] 元数据已落盘: {meta_files[0].name}")
+            print(f"[smoke] 元数据已落盘: {sorted(path.name for path in meta_files)}")
         finally:
             service.terminate()
             try:

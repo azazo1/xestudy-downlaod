@@ -28,15 +28,26 @@
 from reqable import *
 
 import json
+import re
 import traceback
 import urllib.request
 
 # 下载服务的提交接口, 端口需与 --bind 一致.
 SERVER_URL = 'http://127.0.0.1:8010/upload-video-info'
 
+# 只抽到地址时走这个接口, 由服务端负责命名.
+URL_PATH = '/upload-video-url'
+
 # 处理范围内的路径片段. 小鹅通把 multi 拼成了 mutli (video.mutli_line), 两种写法都收,
 # 万一以后改回 multi_line 也不用动脚本; 规则匹配地址写成 *video.mu*line* 即可, 不必放宽到整个域名.
 TARGET_PATH_HINTS = ('/query_video_info', 'mutli_line', 'multi_line')
+
+# 从响应里找 m3u8 地址; 转义写法先还原再匹配.
+M3U8_PATTERN = re.compile(r'https?://[^\s"\'\\<>]+\.m3u8[^\s"\'\\<>]*')
+EXCLUDE_HINTS = ('try', 'preview')
+
+# 名称字段的优先级, 越靠前越可信; 不含裸 name, 免得把清晰度标签当成标题.
+NAME_KEYS = ('file_name', 'filename', 'video_name', 'resource_name', 'title', 'video_title')
 
 # 提交超时时间, 单位秒.
 TIMEOUT = 10.0
@@ -49,6 +60,62 @@ def _server_url(context):
     except Exception:
         address = None
     return address or SERVER_URL
+
+
+def _server_base(context):
+    """取服务根地址: XESTUDY_SERVER 可以写成根地址, 也可以写成完整的提交地址."""
+    base = _server_url(context).rstrip('/')
+    for suffix in ('/upload-video-info', URL_PATH):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    return base
+
+
+def _find_m3u8(text):
+    """取响应里第一个可下载的 m3u8 地址, 跳过试看与预览."""
+    normalized = text.replace('\\/', '/').replace('\\u002F', '/').replace('\\u002f', '/')
+    for match in M3U8_PATTERN.finditer(normalized):
+        url = match.group(0)
+        if any(hint in url.lower() for hint in EXCLUDE_HINTS):
+            continue
+        return url
+    return ''
+
+
+def _pick_name(payload):
+    """按优先级从响应里找一个像标题的字段."""
+    if not isinstance(payload, dict):
+        return ''
+
+    found = {}
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, str) and str(key).lower() in NAME_KEYS:
+                    text = value.strip()
+                    if text and len(text) <= 120:
+                        found.setdefault(str(key).lower(), text)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    for key in NAME_KEYS:
+        if key in found:
+            return found[key]
+    return ''
+
+
+def _submit_task(context, address, payload, reason):
+    """提交下载任务; 失败只打印, 不影响抓包."""
+    try:
+        status, text = _submit(address, payload)
+        print('[xestudy] 已提交下载任务 (%s): %s %s' % (reason, status, text.strip()))
+    except Exception as error:
+        print('[xestudy] 提交下载任务失败 (%s): %s' % (reason, error))
+        print('[xestudy] 请确认下载服务已启动, 且地址与 SERVER_URL 一致')
 
 
 def _submit(address, payload):
@@ -109,36 +176,46 @@ def onResponse(context, response):
         return response
 
     try:
-        payload = json.loads(str(response.body))
+        text = str(response.body)
     except Exception:
-        print('[xestudy] 响应体不是 JSON, 已忽略')
-        traceback.print_exc()
+        print('[xestudy] 读不到响应体, 已忽略')
         return response
 
-    if payload.get('code') != 0:
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = None
+
+    # 只有明确给出非 0 的 code 才算失败; 新接口不一定带这个字段.
+    if isinstance(payload, dict) and payload.get('code') not in (None, 0):
         print('[xestudy] 接口返回 code=%s, 跳过: %s' % (payload.get('code'), payload.get('msg')))
         for line in _describe_request(response):
             print(line)
         print('[xestudy] 常见原因: 请求里 video_id 为空, 或 kotoken/token 登录态已过期; 重新登录并点开视频重试')
         return response
 
-    data = payload.get('data') or {}
-    content = data.get('0') or {}
-    video_info = data.get('video_info') or {}
-    if not video_info.get('src'):
-        print('[xestudy] 响应里没有 data.video_info.src, 跳过')
+    # 老结构: 整个响应体交给服务端, 沿用 "文件名主干-标题" 的命名规则.
+    try:
+        legacy_content = payload['data']['0']
+        legacy_src = payload['data']['video_info']['src']
+    except Exception:
+        legacy_content, legacy_src = None, ''
+
+    if legacy_content and legacy_src:
+        print('[xestudy] 捕获视频: %s' % (legacy_content.get('file_name') or legacy_content.get('title') or '未知'))
+        print('[xestudy] m3u8 地址: %s' % legacy_src)
+        _submit_task(context, _server_url(context), payload, '沿用 video_info 结构')
         return response
 
-    print('[xestudy] 捕获视频: %s' % (content.get('file_name') or content.get('title') or '未知'))
-    print('[xestudy] m3u8 地址: %s' % video_info.get('src'))
+    # 新结构 (例如 xe.course.business.video.mutli_line): 响应里只要有 m3u8 地址就抽出来.
+    url = _find_m3u8(text)
+    if not url:
+        print('[xestudy] %s 响应里没有 m3u8 地址, 跳过' % path)
+        return response
 
-    try:
-        status, text = _submit(_server_url(context), payload)
-        print('[xestudy] 已提交下载任务: %s %s' % (status, text.strip()))
-    except Exception as error:
-        print('[xestudy] 提交下载任务失败: %s' % error)
-        print('[xestudy] 请确认下载服务已启动, 且地址与 SERVER_URL 一致')
-        traceback.print_exc()
+    name = _pick_name(payload)
+    print('[xestudy] 从 %s 抽到 m3u8 地址: %s' % (path, url))
+    _submit_task(context, _server_base(context) + URL_PATH, {'url': url, 'name': name}, '从响应里抽取 m3u8')
 
     # 不改动原始响应, 保证抓包内容与真实响应一致.
     return response

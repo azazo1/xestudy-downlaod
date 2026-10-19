@@ -40,6 +40,7 @@ VALID_PAYLOAD = {
 }
 
 _received: list[dict] = []
+_paths: list[str] = []
 
 
 class _CaptureHandler(BaseHTTPRequestHandler):
@@ -49,6 +50,7 @@ class _CaptureHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length)
         _received.append(json.loads(raw.decode("utf-8")))
+        _paths.append(self.path.split("?", 1)[0])
         body = b'{"code":0,"msg":"Added to queue"}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -185,6 +187,34 @@ def main() -> int:
     ok = len(_received) - before == 1
     server2.shutdown()
     check("XESTUDY_SERVER 覆盖生效", ok)
+
+    # 新接口 (video.mutli_line): 没有 data."0" 与 video_info 时, 从响应里抽地址走直传通道.
+    new_api_url = "https://xestudy.xiaoeknow.com/xe.course.business.video.mutli_line/1.0.0"
+    escaped_m3u8 = "https:\\/\\/htv-vod.h5.xed.plus\\/a83\\/app3qiy6sow1137\\/video\\/abc\\/drm\\/main.m3u8?sign=abc"
+    plain_m3u8 = "https://htv-vod.h5.xed.plus/a83/app3qiy6sow1137/video/abc/drm/main.m3u8?sign=abc"
+    mutli_body = (
+        '{"code":0,"data":{"title":"第三讲 Uart、DMA、ADC","lines":['
+        '{"name":"高清","url":"' + escaped_m3u8 + '"},'
+        '{"name":"标清","url":"https://htv-vod.h5.xed.plus/a83/other/main.m3u8?sign=def"}]}}'
+    )
+
+    before = len(_received)
+    _, same = call_response(new_api_url, mutli_body)
+    check("新接口不改动原始响应", same)
+    check("新接口提交一次任务", len(_received) - before == 1)
+    if len(_received) - before == 1:
+        check("新接口走 upload-video-url", _paths[-1] == "/upload-video-url", _paths[-1])
+        check("转义的 m3u8 地址被还原", _received[-1].get("url") == plain_m3u8, json.dumps(_received[-1], ensure_ascii=False))
+        check("新接口抽到标题字段", _received[-1].get("name") == "第三讲 Uart、DMA、ADC", json.dumps(_received[-1], ensure_ascii=False))
+
+    # 以后小鹅通把拼写改回 multi_line 时同样要能处理.
+    before = len(_received)
+    call_response("https://xestudy.xiaoeknow.com/xe.course.business.video.multi_line/1.0.0", mutli_body)
+    check("multi_line 拼写同样处理", len(_received) - before == 1)
+
+    before = len(_received)
+    call_response(new_api_url, '{"code":0,"data":{"lines":[{"url":"https://a.com/try/main.m3u8?sign=x"}]}}')
+    check("试看地址不提交", len(_received) == before)
 
     # 诊断脚本: 覆盖全部 xiaoe 请求, 把请求与响应都回传给服务端做分析.
     sniffer = load_addon(SNIFFER_PATH, "addons_sniffer")

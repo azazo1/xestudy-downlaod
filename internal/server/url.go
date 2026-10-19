@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -41,6 +42,9 @@ func (s *Server) handleUploadVideoURL(writer http.ResponseWriter, request *http.
 	name := strings.TrimSpace(payload.Name)
 	if name == "" {
 		name = fmt.Sprintf("video-%s.mp4", time.Now().Format(fallbackNameLayout))
+	} else if path.Ext(name) == "" {
+		// 抓包脚本抽到的标题通常不带后缀, 补一个默认容器后缀, 免得播放器不认.
+		name += ".mp4"
 	}
 	fileName := naming.BuildVideoFileName(name, "")
 

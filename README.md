@@ -32,9 +32,18 @@ just build
 ## 配置 reqable
 
 1. 打开 reqable 的脚本功能: 菜单 `Traffic` -> `Script` -> `Enable`;
-2. 新建规则: `Traffic` -> `Script` -> `Add Rule`, 匹配地址填 `https://app.xiaoe-tech.com/query_video_info`;
+2. 新建规则: `Traffic` -> `Script` -> `Add Rule`, 匹配地址填 `*video.mu*line*`
+   (小鹅通把 multi 写成了 mutli, 这样写两种拼写都能命中), 老接口那条
+   `https://app.xiaoe-tech.com/query_video_info` 规则可以一并留着;
 3. 把 [query-video-info.py](assets/reqable/query-video-info.py) 的内容整体粘贴到规则脚本编辑区, 保存;
 4. 在小鹅通客户端或小程序里播放视频, 服务端日志出现 `收到下载请求` 即为成功.
+
+规则地址别写成 `*xiaoe*`: 每命中一次都要新起一个 Python 进程, 匹配太宽会拖慢抓包.
+
+脚本对两类响应分别处理: 还是老结构 (`data."0"` 加 `data.video_info.src`) 时把整个响应体提交给
+`/upload-video-info`, 沿用 `{文件名主干}-{标题}.{后缀}` 的命名; 其他结构 (例如
+`xe.course.business.video.mutli_line`) 就从响应里抽出 m3u8 地址与标题提交给 `/upload-video-url`,
+标题按 `file_name`, `video_name`, `title` 等字段的顺序取, 试看与预览地址会被跳过.
 
 脚本只依赖 Python 标准库. 需要改服务地址时, 优先在 reqable 的全局环境变量里设置 `XESTUDY_SERVER`,
 其次才改脚本里的 `SERVER_URL`.
