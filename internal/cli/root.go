@@ -63,6 +63,7 @@ POST 到 /upload-video-info, 服务解析出 m3u8 地址后下载分片, 解密�
 	flags.IntVarP(&cfg.Concurrent, "concurrent", "c", cfg.Concurrent, "单个视频的分片下载并发数")
 	flags.IntVar(&cfg.QueueSize, "queue-size", cfg.QueueSize, "等待下载的任务数量上限")
 	flags.BoolVar(&cfg.FFmpeg, "ffmpeg", cfg.FFmpeg, "使用 ffmpeg 拼接分片, 默认直接拼接字节流")
+	flags.BoolVar(&cfg.Sniff, "sniff", cfg.Sniff, "开放抓包诊断接口, 记录并分析脚本回传的请求, 用于定位视频信息来自哪个接口")
 	flags.BoolVar(&cfg.Debug, "debug", cfg.Debug, "输出 debug 级别日志")
 
 	return command
@@ -123,6 +124,7 @@ func run(ctx context.Context, cfg config.Config) error {
 		SavePath:   savePath,
 		Concurrent: cfg.Concurrent,
 		FFmpeg:     cfg.FFmpeg,
+		Sniff:      cfg.Sniff,
 	}, jobs, logger)
 
 	httpServer := &http.Server{
@@ -136,6 +138,12 @@ func run(ctx context.Context, cfg config.Config) error {
 			"提交地址", fmt.Sprintf("http://%s/upload-video-info", listener.Addr().String()),
 			"健康检查", fmt.Sprintf("http://%s/healthz", listener.Addr().String()),
 		)
+		if cfg.Sniff {
+			logger.Info("抓包诊断已开启",
+				"记录地址", fmt.Sprintf("http://%s/sniff", listener.Addr().String()),
+				"报告地址", fmt.Sprintf("http://%s/sniff/report", listener.Addr().String()),
+			)
+		}
 		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErrors <- err
 		}

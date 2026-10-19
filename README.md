@@ -24,6 +24,8 @@ just build
 | --- | --- | --- |
 | `/upload-video-info` | POST | 接收抓包脚本回传的视频信息并加入下载队列 |
 | `/healthz` | GET | 存活检查, 确认脚本要提交的地址是否可达 |
+| `/sniff` | POST / DELETE | 接收抓包诊断记录 / 清空记录, 需要 `--sniff` |
+| `/sniff/report` | GET | 查看诊断报告, 需要 `--sniff` |
 
 ## 配置 reqable
 
@@ -38,6 +40,30 @@ just build
 注意 Reqable 的运行器对每个请求都会无条件调用 `onRequest`, 对每个响应无条件调用 `onResponse`,
 所以脚本里两个函数都必须定义, 缺一个就会在调试控制台报 `module 'addons' has no attribute ...`
 并让脚本以退出码 1 结束.
+
+### 抓包诊断
+
+小鹅通客户端换接口后, 下载规则可能不再命中, 日志里只剩下 `接口返回 code=6` 这类探测请求.
+这时用诊断模式把所有 xiaoe 流量收下来分析:
+
+1. 带诊断参数启动服务:
+
+   ```shell
+   ./bin/xestudy-downlaod --sniff --savepath ./videos --debug
+   ```
+
+2. 在 Reqable 里再加一条脚本规则 (与下载规则并存), 匹配地址填 `*xiaoe*`,
+   内容粘贴 [xiaoe-sniffer.py](assets/reqable/xiaoe-sniffer.py);
+3. 在小鹅通里点开视频并播放几秒, 服务端日志出现 `发现候选接口` 说明抓到了;
+4. 打开 <http://127.0.0.1:8010/sniff/report> 看报告: `hint` 直接给出规则匹配地址该怎么写,
+   `endpoints` 列出各接口是否出现 m3u8, 请求是否带非空 `video_id`;
+5. 下一轮诊断前清空记录:
+
+   ```shell
+   curl -X DELETE http://127.0.0.1:8010/sniff
+   ```
+
+诊断记录只存在内存里, 单条正文保存上限 64 KiB, 报告里每条记录只保留 512 字节摘要.
 
 不接 reqable 时, 也可以手工提交一次任务:
 
@@ -79,6 +105,7 @@ curl -X POST http://127.0.0.1:8010/upload-video-info \
 | `just serve` | 前台启动服务, 保存到 `./videos` |
 | `just test` | 运行单元测试, 不访问外网 |
 | `just smoke` | 端到端自检: 起假视频源, 提交任务并校验成片 |
+| `just sniff` | 带抓包诊断启动服务, 用于定位视频信息来自哪个接口 |
 | `just check-reqable` | 检查 reqable 脚本的入口与提交行为, 不需要安装 reqable |
 | `just vet` | 静态检查 |
 | `just fmt` | 代码格式化 |

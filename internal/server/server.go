@@ -16,6 +16,7 @@ import (
 	"github.com/azazo1/xestudy-downlaod/internal/downloader"
 	"github.com/azazo1/xestudy-downlaod/internal/model"
 	"github.com/azazo1/xestudy-downlaod/internal/naming"
+	"github.com/azazo1/xestudy-downlaod/internal/sniff"
 )
 
 // maxRequestBody 是请求体大小上限, 小鹅通的响应大约几十 KB.
@@ -29,13 +30,16 @@ type Options struct {
 	Concurrent int
 	// FFmpeg 决定下载任务是否使用 ffmpeg 拼接.
 	FFmpeg bool
+	// Sniff 为 true 时额外开放抓包诊断接口, 用于定位视频信息来自哪个接口.
+	Sniff bool
 }
 
 // Server 把收到的抓包数据转换成下载任务.
 type Server struct {
-	options Options
-	jobs    chan<- downloader.Job
-	logger  *slog.Logger
+	options  Options
+	jobs     chan<- downloader.Job
+	logger   *slog.Logger
+	recorder *sniff.Recorder
 }
 
 // response 是与 rust 版一致的响应体.
@@ -49,7 +53,12 @@ func New(options Options, jobs chan<- downloader.Job, logger *slog.Logger) *Serv
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{options: options, jobs: jobs, logger: logger}
+
+	instance := &Server{options: options, jobs: jobs, logger: logger}
+	if options.Sniff {
+		instance.recorder = sniff.NewRecorder()
+	}
+	return instance
 }
 
 // Handler 返回注册好路由的 http.Handler.
@@ -57,6 +66,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/upload-video-info", s.handleUploadVideoInfo)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/sniff", s.handleSniff)
+	mux.HandleFunc("/sniff/report", s.handleSniffReport)
 	return mux
 }
 

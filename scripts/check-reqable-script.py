@@ -6,6 +6,8 @@ addons.onResponse, 缺少任何一个都会在抓包时报 AttributeError 并让
 本脚本用替身 reqable 模块加载真正的脚本文件, 按运行器的方式调用两个入口, 并用本地
 HTTP 服务断言提交内容, 因此不需要安装 reqable, 也不需要下载服务真的在跑.
 
+覆盖两个脚本: 下载用的 query-video-info.py 与诊断用的 xiaoe-sniffer.py.
+
 只依赖 Python 标准库.
 """
 
@@ -21,6 +23,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "assets" / "reqable" / "query-video-info.py"
+SNIFFER_PATH = PROJECT_ROOT / "assets" / "reqable" / "xiaoe-sniffer.py"
 
 TARGET_URL = "https://app.xiaoe-tech.com/query_video_info?sign=test"
 
@@ -68,9 +71,10 @@ class FakeContext:
 class FakeResponse:
     """替身 response, body 与 reqable 的 HttpBody 一样支持 str() 取文本."""
 
-    def __init__(self, body, request=None):
+    def __init__(self, body, request=None, code: int = 200):
         self.body = body
         self.request = request
+        self.code = code
 
 
 class FakeRequest:
@@ -87,11 +91,11 @@ def install_reqable_stub() -> None:
     sys.modules["reqable"] = types.ModuleType("reqable")
 
 
-def load_addon() -> types.ModuleType:
+def load_addon(path: Path = SCRIPT_PATH, name: str = "addons") -> types.ModuleType:
     """把抓包脚本当成 runnable 的 addons 模块加载, 与 Reqable 的做法一致."""
-    spec = importlib.util.spec_from_file_location("addons", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"无法加载脚本: {SCRIPT_PATH}")
+        raise RuntimeError(f"无法加载脚本: {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -181,6 +185,44 @@ def main() -> int:
     ok = len(_received) - before == 1
     server2.shutdown()
     check("XESTUDY_SERVER 覆盖生效", ok)
+
+    # 诊断脚本: 覆盖全部 xiaoe 请求, 把请求与响应都回传给服务端做分析.
+    sniffer = load_addon(SNIFFER_PATH, "addons_sniffer")
+    check("诊断脚本定义了 onRequest", callable(getattr(sniffer, "onRequest", None)))
+    check("诊断脚本定义了 onResponse", callable(getattr(sniffer, "onResponse", None)))
+
+    sniff_env = {"XESTUDY_SNIFF_SERVER": server_url}
+    probe_request = FakeRequest(body=json.dumps({"buz_data": {"video_id": "v_1"}}, ensure_ascii=False))
+    before = len(_received)
+    passed = sniffer.onRequest(FakeContext(TARGET_URL, sniff_env), probe_request)
+    check("诊断脚本原样放行请求", passed is probe_request)
+    check("请求阶段回传一条记录", len(_received) - before == 1)
+    if len(_received) - before == 1:
+        entry = _received[-1]
+        check(
+            "请求记录带阶段与请求体",
+            entry.get("phase") == "request" and "v_1" in entry.get("request_body", ""),
+            json.dumps(entry, ensure_ascii=False)[:120],
+        )
+
+    before = len(_received)
+    sniffer.onResponse(FakeContext(TARGET_URL, sniff_env), FakeResponse(json.dumps(VALID_PAYLOAD, ensure_ascii=False)))
+    check("响应阶段回传一条记录", len(_received) - before == 1)
+    if len(_received) - before == 1:
+        entry = _received[-1]
+        check(
+            "响应记录带阶段与响应体",
+            entry.get("phase") == "response" and "m3u8" in entry.get("response_body", ""),
+            json.dumps(entry, ensure_ascii=False)[:120],
+        )
+
+    before = len(_received)
+    sniffer.onResponse(FakeContext("https://example.com/other_api", sniff_env), FakeResponse("{}"))
+    check("不在采集范围的 URL 不回传", len(_received) == before)
+
+    before = len(_received)
+    sniffer.onResponse(FakeContext(TARGET_URL, sniff_env), FakeResponse("x" * (300 * 1024)))
+    check("超长正文会被截断", len(_received) - before == 1 and _received[-1].get("truncated") is True)
 
     server.shutdown()
 

@@ -30,6 +30,8 @@ type Config struct {
 	QueueSize int
 	// FFmpeg 为 true 时使用 ffmpeg 拼接分片, 否则直接拼接字节流.
 	FFmpeg bool
+	// Sniff 为 true 时开放抓包诊断接口, 用于定位视频信息来自哪个接口.
+	Sniff bool
 	// Debug 为 true 时输出 debug 级别日志.
 	Debug bool
 }

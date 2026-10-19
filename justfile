@@ -23,6 +23,10 @@ dist:
 serve *args:
     go run ./cmd/xestudy-downlaod --savepath ./videos {{args}}
 
+# 带抓包诊断启动服务, 用于定位视频信息来自哪个接口.
+sniff:
+    go run ./cmd/xestudy-downlaod --savepath ./videos --sniff --debug
+
 # 运行全部单元测试, 测试不访问外网.
 test:
     go test ./... -count=1
