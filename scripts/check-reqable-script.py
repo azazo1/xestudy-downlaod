@@ -68,12 +68,18 @@ class FakeContext:
 class FakeResponse:
     """替身 response, body 与 reqable 的 HttpBody 一样支持 str() 取文本."""
 
-    def __init__(self, body):
+    def __init__(self, body, request=None):
         self.body = body
+        self.request = request
 
 
 class FakeRequest:
-    """替身 request, onRequest 应当原样放行."""
+    """替身 request, onRequest 应当原样放行, 同时给诊断信息提供 method/path/body."""
+
+    def __init__(self, method: str = "POST", path: str = "/query_video_info", body: str = ""):
+        self.method = method
+        self.path = path
+        self.body = body
 
 
 def install_reqable_stub() -> None:
@@ -148,6 +154,19 @@ def main() -> int:
     response = FakeResponse("<html>不是 JSON</html>")
     check("响应体不是 JSON 时原样返回", addon.onResponse(FakeContext(TARGET_URL, {"XESTUDY_SERVER": server_url}), response) is response)
     check("响应体不是 JSON 时不提交", len(_received) == before)
+
+    # code 非 0 时要能指出请求侧的情况, 小鹅通页面打开时的探测请求就属于这一类.
+    probe_body = json.dumps({"buz_data": {"video_id": "", "content_app_id": ""}, "app_id": "app3qiy6sow1137"}, ensure_ascii=False)
+    probe = FakeResponse(json.dumps({"code": 6, "msg": "未找到", "data": ""}, ensure_ascii=False), FakeRequest(body=probe_body))
+    lines = addon._describe_request(probe)
+    check("code 非 0 时给出请求侧诊断", any("buz_data" in line for line in lines), str(lines))
+    check("video_id 为空时点明是探测请求", any("探测请求" in line for line in lines), str(lines))
+    check("取不到请求时诊断为空", addon._describe_request(FakeResponse("{}")) == [])
+
+    before = len(_received)
+    result = addon.onResponse(FakeContext(TARGET_URL, {"XESTUDY_SERVER": server_url}), probe)
+    check("code 非 0 且带请求时原样放行", result is probe)
+    check("code 非 0 且带请求时不提交", len(_received) == before)
 
     before = len(_received)
     response, same = call_response(TARGET_URL, VALID_PAYLOAD, server_override="http://127.0.0.1:1/upload-video-info")

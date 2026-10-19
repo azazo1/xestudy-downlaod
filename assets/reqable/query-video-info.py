@@ -66,6 +66,37 @@ def onRequest(context, request):
     return request
 
 
+def _describe_request(response):
+    """从响应侧的请求里摘出诊断信息, 返回若干行文本.
+
+    code 非 0 时用它说明请求侧的情况: 小鹅通的探测请求里 buz_data 是空的,
+    这种情况服务端必然返回 "未找到", 与脚本无关.
+    """
+    request = getattr(response, 'request', None)
+    if request is None:
+        return []
+
+    lines = []
+    method = getattr(request, 'method', '?')
+    path = getattr(request, 'path', '?')
+    lines.append('[xestudy] 该响应来自 %s %s' % (method, path))
+
+    try:
+        body = str(request.body)
+        if body.startswith('{'):
+            data = json.loads(body)
+            buz_data = data.get('buz_data')
+            if isinstance(buz_data, dict):
+                lines.append('[xestudy] 请求 buz_data=%s' % json.dumps(buz_data, ensure_ascii=False))
+                if not buz_data.get('video_id'):
+                    lines.append('[xestudy] video_id 为空, 这是页面打开时的探测请求, 点开并播放视频后的请求才带 video_id')
+    except Exception:
+        # 诊断信息取不到不影响主流程, 响应照常放行.
+        pass
+
+    return lines
+
+
 def onResponse(context, response):
     # 规则本身已经按 URL 匹配, 这里再确认一次路径, 避免规则被改宽后误动作.
     if not context.url.split('?', 1)[0].endswith(TARGET_PATH):
@@ -80,6 +111,9 @@ def onResponse(context, response):
 
     if payload.get('code') != 0:
         print('[xestudy] 接口返回 code=%s, 跳过: %s' % (payload.get('code'), payload.get('msg')))
+        for line in _describe_request(response):
+            print(line)
+        print('[xestudy] 常见原因: 请求里 video_id 为空, 或 kotoken/token 登录态已过期; 重新登录并点开视频重试')
         return response
 
     data = payload.get('data') or {}
