@@ -172,12 +172,34 @@ jobs:
           set -euo pipefail
           go test ./... -count=1
 
-  # 依赖链里没有 cgo, 所以在一个 runner 上交叉编译出全部目标, 不必按平台拆矩阵.
-  # 交叉产物跑不起来, dist.py 会改用文件格式, 架构与版本串校验, 只有宿主平台
-  # 那一份真跑 --version 冒烟, 确认 -X 注入没有静默失效.
+  # 依赖链在 Linux 上含 cgo: go list 会列出 runtime/cgo 与 net, 交叉编译出来的
+  # 产物会绑定构建机的系统库, 所以按原生 runner 矩阵逐个目标构建, 每份都真跑
+  # --version 冒烟, 确认 -X 注入没有静默失效.
   build:
     needs: version
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+          - runner: macos-15-intel
+            platform: macos
+            arch: x86_64
+          - runner: macos-15
+            platform: macos
+            arch: aarch64
+          - runner: windows-2025
+            platform: windows
+            arch: x86_64
+          - runner: windows-11-arm
+            platform: windows
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: 检出目标提交
         uses: actions/checkout@v7
@@ -197,15 +219,16 @@ jobs:
         with:
           enable-cache: false
 
-      - name: 生成全部平台发布产物
+      # dist.py 内部完成平台判断与版本解析, 三个平台共用同一条命令.
+      - name: 生成当前平台发布产物
         env:
           PROJECT_BUILD_VERSION: v${{ needs.version.outputs.build_version }}
-        run: uv run --no-project python scripts/dist.py --all
+        run: uv run --no-project python scripts/dist.py
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
-          name: xestudy-downlaod-${{ needs.version.outputs.build_version }}
+          name: xestudy-downlaod-${{ needs.version.outputs.build_version }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             dist/xestudy-downlaod-*.tar.gz
             dist/xestudy-downlaod-*.zip
