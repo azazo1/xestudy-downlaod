@@ -99,7 +99,10 @@ def _describe_request(response):
 
 def onResponse(context, response):
     # 规则本身已经按 URL 匹配, 这里再确认一次路径, 避免规则被改宽后误动作.
-    if not context.url.split('?', 1)[0].endswith(TARGET_PATH):
+    # 规则被放宽 (例如为了排查而写成 *xiaoe-tech.com*) 时会看到这条提示, 便于发现真实路径.
+    path = context.url.split('?', 1)[0]
+    if not path.endswith(TARGET_PATH):
+        print('[xestudy] 规则命中了 %s, 但路径不是 %s, 已跳过' % (path, TARGET_PATH))
         return response
 
     try:
