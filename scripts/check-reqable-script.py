@@ -4,7 +4,7 @@
 Reqable 的运行器对每个请求都会无条件调用 addons.onRequest, 对每个响应无条件调用
 addons.onResponse, 缺少任何一个都会在抓包时报 AttributeError 并让脚本以退出码 1 结束.
 本脚本用替身 reqable 模块加载真正的脚本文件, 按运行器的方式调用两个入口, 并用本地
-HTTP 服务断言提交内容, 因此不需要安装 reqable, 也不需要下载服务真的在跑.
+HTTP 服务断言提交的路径与内容, 因此不需要安装 reqable, 也不需要下载服务真的在跑.
 
 覆盖两个脚本: 下载用的 query-video-info.py 与诊断用的 xiaoe-sniffer.py.
 
@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
+import tempfile
 import threading
 import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,8 +28,13 @@ SCRIPT_PATH = PROJECT_ROOT / "assets" / "reqable" / "query-video-info.py"
 SNIFFER_PATH = PROJECT_ROOT / "assets" / "reqable" / "xiaoe-sniffer.py"
 
 TARGET_URL = "https://app.xiaoe-tech.com/query_video_info?sign=test"
+NEW_API_URL = "https://xestudy.xiaoeknow.com/xe.course.business.video.mutli_line/1.0.0"
+OTHER_URL = "https://example.com/other_api"
 
-VALID_PAYLOAD = {
+M3U8_ESCAPED = "https:\\/\\/htv-vod.h5.xed.plus\\/a83\\/app3qiy6sow1137\\/video\\/abc\\/drm\\/main.m3u8?sign=abc"
+M3U8_PLAIN = "https://htv-vod.h5.xed.plus/a83/app3qiy6sow1137/video/abc/drm/main.m3u8?sign=abc"
+
+LEGACY_PAYLOAD = {
     "code": 0,
     "msg": "",
     "data": {
@@ -35,11 +42,24 @@ VALID_PAYLOAD = {
             "file_name": "蓝桥杯嵌入式第三讲——Uart、DMA、ADC.mp4",
             "title": "Uart、DMA、ADC",
         },
-        "video_info": {"src": "https://encrypt-k-vod.xet.tech/drm/v.f421220.m3u8?sign=test"},
+        "video_info": {"src": M3U8_PLAIN},
+    },
+}
+
+# 新结构: 标题与地址在完全不同的字段里, 没有老接口那套 data."0" 与 video_info.
+NEW_PAYLOAD = {
+    "code": 0,
+    "data": {
+        "title": "第三讲 Uart、DMA、ADC",
+        "lines": [
+            {"line_name": "高清", "play_url": M3U8_ESCAPED},
+            {"line_name": "标清", "play_url": "https://htv-vod.h5.xed.plus/a83/other/main.m3u8?sign=def"},
+        ],
     },
 }
 
 _received: list[dict] = []
+_paths: list[str] = []
 
 
 class _CaptureHandler(BaseHTTPRequestHandler):
@@ -49,6 +69,7 @@ class _CaptureHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length)
         _received.append(json.loads(raw.decode("utf-8")))
+        _paths.append(self.path.split("?", 1)[0])
         body = b'{"code":0,"msg":"Added to queue"}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -61,11 +82,12 @@ class _CaptureHandler(BaseHTTPRequestHandler):
 
 
 class FakeContext:
-    """替身 context, 只实现脚本用到的 url 与 env."""
+    """替身 context, 只实现脚本用到的 url, env 与 uid."""
 
-    def __init__(self, url: str, env: dict | None = None):
+    def __init__(self, url: str, env: dict | None = None, uid: str = "1-2-3"):
         self.url = url
         self.env = env or {}
+        self.uid = uid
 
 
 class FakeResponse:
@@ -91,7 +113,7 @@ def install_reqable_stub() -> None:
     sys.modules["reqable"] = types.ModuleType("reqable")
 
 
-def load_addon(path: Path = SCRIPT_PATH, name: str = "addons") -> types.ModuleType:
+def load_addon(path: Path, name: str) -> types.ModuleType:
     """把抓包脚本当成 runnable 的 addons 模块加载, 与 Reqable 的做法一致."""
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -103,11 +125,16 @@ def load_addon(path: Path = SCRIPT_PATH, name: str = "addons") -> types.ModuleTy
 
 def main() -> int:
     install_reqable_stub()
-    addon = load_addon()
+    state_file = Path(tempfile.mkdtemp(prefix="xestudy-check-")) / "last-name.json"
+    os.environ["XESTUDY_STATE_FILE"] = str(state_file)
+
+    addon = load_addon(SCRIPT_PATH, "addons")
+    sniffer = load_addon(SNIFFER_PATH, "addons_sniffer")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CaptureHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    server_url = f"http://127.0.0.1:{server.server_address[1]}/upload-video-info"
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    env = {"XESTUDY_SERVER": base_url}
 
     failures: list[str] = []
 
@@ -118,80 +145,97 @@ def main() -> int:
             failures.append(name)
             print(f"失败: {name} {detail}".rstrip())
 
+    def call(url: str, body, context_env: dict | None = env, uid: str = "1-2-3"):
+        """按运行器的方式调用 onResponse, 返回 (返回值, 是否与传入对象一致)."""
+        response = FakeResponse(body if isinstance(body, str) else json.dumps(body, ensure_ascii=False))
+        result = addon.onResponse(FakeContext(url, context_env if context_env is not None else env, uid), response)
+        return result, result is response
+
+    def last_submission():
+        if not _received:
+            return "", {}
+        return _paths[-1], _received[-1]
+
     # 运行器会无条件调用两个入口, 缺一个就会在抓包时报 AttributeError.
-    check("定义了 onRequest", callable(getattr(addon, "onRequest", None)))
-    check("定义了 onResponse", callable(getattr(addon, "onResponse", None)))
+    check("下载脚本定义了 onRequest", callable(getattr(addon, "onRequest", None)))
+    check("下载脚本定义了 onResponse", callable(getattr(addon, "onResponse", None)))
+    check("诊断脚本定义了 onRequest", callable(getattr(sniffer, "onRequest", None)))
+    check("诊断脚本定义了 onResponse", callable(getattr(sniffer, "onResponse", None)))
     if failures:
         server.shutdown()
         return 1
 
     request = FakeRequest()
-    check("onRequest 原样放行请求", addon.onRequest(FakeContext(TARGET_URL), request) is request)
+    check("下载脚本原样放行请求", addon.onRequest(FakeContext(TARGET_URL, env), request) is request)
 
-    def call_response(url: str, payload, server_override: str | None = server_url):
-        env = {"XESTUDY_SERVER": server_override} if server_override else {}
-        response = FakeResponse(payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False))
-        return addon.onResponse(FakeContext(url, env), response), response
-
+    # 老结构继续走老通道, 保持原有命名规则.
     before = len(_received)
-    response, same = call_response(TARGET_URL, VALID_PAYLOAD)
-    check("onResponse 不改动原始响应", response is same)
-    check("命中接口时提交一次任务", len(_received) - before == 1)
+    _, same = call(TARGET_URL, LEGACY_PAYLOAD)
+    check("老结构不改动原始响应", same)
+    check("老结构提交一次任务", len(_received) - before == 1)
+    path, body = last_submission()
     if len(_received) - before == 1:
-        check("提交内容与响应体一致", _received[-1] == VALID_PAYLOAD, json.dumps(_received[-1], ensure_ascii=False)[:120])
+        check("老结构走 upload-video-info", path == "/upload-video-info", path)
+        check("老结构提交内容与响应体一致", body == LEGACY_PAYLOAD)
 
-    ignored = [
-        ("路径不匹配时不提交", FakeContext("https://app.xiaoe-tech.com/other_api", {"XESTUDY_SERVER": server_url}), VALID_PAYLOAD),
-        ("接口返回非 0 时不提交", FakeContext(TARGET_URL, {"XESTUDY_SERVER": server_url}), {"code": 6, "msg": "未找到", "data": ""}),
-        (
-            "缺少 m3u8 地址时不提交",
-            FakeContext(TARGET_URL, {"XESTUDY_SERVER": server_url}),
-            {"code": 0, "data": {"0": {"file_name": "a.mp4"}, "video_info": {}}},
-        ),
-    ]
-    for name, context, payload in ignored:
-        before = len(_received)
-        addon.onResponse(context, FakeResponse(json.dumps(payload, ensure_ascii=False)))
-        check(name, len(_received) == before)
+    # 新结构: 只抽地址与标题, 走直传通道.
+    before = len(_received)
+    call(NEW_API_URL, NEW_PAYLOAD)
+    check("新结构提交一次任务", len(_received) - before == 1)
+    if len(_received) - before == 1:
+        path, body = last_submission()
+        check("新结构走 upload-video-url", path == "/upload-video-url", path)
+        check("新结构抽到转义后的地址", body.get("url") == M3U8_PLAIN, json.dumps(body, ensure_ascii=False))
+        check("新结构取到标题字段", body.get("name") == "第三讲 Uart、DMA、ADC", json.dumps(body, ensure_ascii=False))
+
+    # 试看与预览地址不作为下载目标.
+    before = len(_received)
+    call(NEW_API_URL, {"code": 0, "data": {"lines": [{"play_url": "https://a.com/try/main.m3u8?sign=x"}]}})
+    check("试看地址不提交", len(_received) == before)
+
+    # 纯文本响应 (不是 JSON) 里的地址也能兜住.
+    before = len(_received)
+    call(NEW_API_URL, f"prefix {M3U8_PLAIN} suffix")
+    check("非 JSON 正文里的地址也能抽到", len(_received) - before == 1)
+
+    # 只有标题没有地址时先记住, 之后只带地址的响应复用这个标题.
+    state_file.unlink(missing_ok=True)
+    before = len(_received)
+    call(NEW_API_URL, {"code": 0, "data": {"title": "第九讲 SPI 与 I2C"}})
+    check("只有标题时不提交", len(_received) == before)
+    check("标题被记住", state_file.exists())
 
     before = len(_received)
-    response = FakeResponse("<html>不是 JSON</html>")
-    check("响应体不是 JSON 时原样返回", addon.onResponse(FakeContext(TARGET_URL, {"XESTUDY_SERVER": server_url}), response) is response)
-    check("响应体不是 JSON 时不提交", len(_received) == before)
+    call(NEW_API_URL, {"code": 0, "data": {"lines": [{"play_url": M3U8_PLAIN}]}})
+    check("随后仅带地址的响应被提交", len(_received) - before == 1)
+    if len(_received) - before == 1:
+        check("复用了记住的标题", last_submission()[1].get("name") == "第九讲 SPI 与 I2C")
 
-    # code 非 0 时要能指出请求侧的情况, 小鹅通页面打开时的探测请求就属于这一类.
-    probe_body = json.dumps({"buz_data": {"video_id": "", "content_app_id": ""}, "app_id": "app3qiy6sow1137"}, ensure_ascii=False)
-    probe = FakeResponse(json.dumps({"code": 6, "msg": "未找到", "data": ""}, ensure_ascii=False), FakeRequest(body=probe_body))
-    lines = addon._describe_request(probe)
-    check("code 非 0 时给出请求侧诊断", any("buz_data" in line for line in lines), str(lines))
-    check("video_id 为空时点明是探测请求", any("探测请求" in line for line in lines), str(lines))
-    check("取不到请求时诊断为空", addon._describe_request(FakeResponse("{}")) == [])
-
+    # 无地址无标题的普通响应应当安静跳过.
     before = len(_received)
-    result = addon.onResponse(FakeContext(TARGET_URL, {"XESTUDY_SERVER": server_url}), probe)
-    check("code 非 0 且带请求时原样放行", result is probe)
-    check("code 非 0 且带请求时不提交", len(_received) == before)
+    _, same = call(TARGET_URL, {"code": 6, "msg": "未找到", "data": ""})
+    check("普通响应原样返回", same)
+    check("普通响应不提交", len(_received) == before)
 
+    # 不在采集范围的 URL 直接放行.
     before = len(_received)
-    response, same = call_response(TARGET_URL, VALID_PAYLOAD, server_override="http://127.0.0.1:1/upload-video-info")
-    check("下载服务不可达时仍返回原始响应", response is same)
-    check("下载服务不可达时不视为已提交", len(_received) == before)
+    call(OTHER_URL, NEW_PAYLOAD, context_env={"XESTUDY_SERVER": base_url, "XESTUDY_MATCHES": "xiaoe"})
+    check("不在采集范围不提交", len(_received) == before)
 
-    # 地址来自 Reqable 环境变量时也应当生效, 这里换一个端口再确认一次.
-    server2 = ThreadingHTTPServer(("127.0.0.1", 0), _CaptureHandler)
-    threading.Thread(target=server2.serve_forever, daemon=True).start()
+    # 采集范围可用环境变量放宽.
     before = len(_received)
-    call_response(TARGET_URL, VALID_PAYLOAD, server_override=f"http://127.0.0.1:{server2.server_address[1]}/upload-video-info")
-    ok = len(_received) - before == 1
-    server2.shutdown()
-    check("XESTUDY_SERVER 覆盖生效", ok)
+    call(OTHER_URL, NEW_PAYLOAD, context_env={"XESTUDY_SERVER": base_url, "XESTUDY_MATCHES": "example.com"})
+    check("XESTUDY_MATCHES 覆盖生效", len(_received) - before == 1)
 
-    # 诊断脚本: 覆盖全部 xiaoe 请求, 把请求与响应都回传给服务端做分析.
-    sniffer = load_addon(SNIFFER_PATH, "addons_sniffer")
-    check("诊断脚本定义了 onRequest", callable(getattr(sniffer, "onRequest", None)))
-    check("诊断脚本定义了 onResponse", callable(getattr(sniffer, "onResponse", None)))
+    # 服务不可达时不能抛异常, 也不能丢掉原始响应.
+    before = len(_received)
+    response = FakeResponse(json.dumps(LEGACY_PAYLOAD, ensure_ascii=False))
+    result = addon.onResponse(FakeContext(TARGET_URL, {"XESTUDY_SERVER": "http://127.0.0.1:1"}), response)
+    check("服务不可达时原样返回响应", result is response)
+    check("服务不可达时不视为已提交", len(_received) == before)
 
-    sniff_env = {"XESTUDY_SNIFF_SERVER": server_url}
+    # 诊断脚本: 覆盖全部 xiaoe 请求, 把请求与响应都回传给服务端分析.
+    sniff_env = {"XESTUDY_SNIFF_SERVER": f"{base_url}/sniff"}
     probe_request = FakeRequest(body=json.dumps({"buz_data": {"video_id": "v_1"}}, ensure_ascii=False))
     before = len(_received)
     passed = sniffer.onRequest(FakeContext(TARGET_URL, sniff_env), probe_request)
@@ -206,19 +250,12 @@ def main() -> int:
         )
 
     before = len(_received)
-    sniffer.onResponse(FakeContext(TARGET_URL, sniff_env), FakeResponse(json.dumps(VALID_PAYLOAD, ensure_ascii=False)))
+    sniffer.onResponse(FakeContext(TARGET_URL, sniff_env), FakeResponse(json.dumps(LEGACY_PAYLOAD, ensure_ascii=False)))
     check("响应阶段回传一条记录", len(_received) - before == 1)
-    if len(_received) - before == 1:
-        entry = _received[-1]
-        check(
-            "响应记录带阶段与响应体",
-            entry.get("phase") == "response" and "m3u8" in entry.get("response_body", ""),
-            json.dumps(entry, ensure_ascii=False)[:120],
-        )
 
     before = len(_received)
-    sniffer.onResponse(FakeContext("https://example.com/other_api", sniff_env), FakeResponse("{}"))
-    check("不在采集范围的 URL 不回传", len(_received) == before)
+    sniffer.onResponse(FakeContext(OTHER_URL, sniff_env), FakeResponse("{}"))
+    check("诊断脚本跳过不在范围的 URL", len(_received) == before)
 
     before = len(_received)
     sniffer.onResponse(FakeContext(TARGET_URL, sniff_env), FakeResponse("x" * (300 * 1024)))

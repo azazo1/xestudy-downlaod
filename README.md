@@ -32,12 +32,27 @@ just build
 ## 配置 reqable
 
 1. 打开 reqable 的脚本功能: 菜单 `Traffic` -> `Script` -> `Enable`;
-2. 新建规则: `Traffic` -> `Script` -> `Add Rule`, 匹配地址填 `https://app.xiaoe-tech.com/query_video_info`;
+2. 新建规则: `Traffic` -> `Script` -> `Add Rule`, 匹配地址填 `*xiaoe*`;
 3. 把 [query-video-info.py](assets/reqable/query-video-info.py) 的内容整体粘贴到规则脚本编辑区, 保存;
 4. 在小鹅通客户端或小程序里播放视频, 服务端日志出现 `收到下载请求` 即为成功.
 
-脚本只依赖 Python 标准库. 需要改服务地址时, 优先在 reqable 的全局环境变量里设置 `XESTUDY_SERVER`,
-其次才改脚本里的 `SERVER_URL`.
+规则地址写得宽一点是有意的: 脚本按**响应内容**判断要不要下载, 而不是按接口地址. 小鹅通客户端
+换过接口 (甚至接口名里带着拼写错误 `video.mutli_line`), 按固定路径匹配迟早失效, 现在的逻辑是
+URL 落在采集范围内就解析响应, 谁给出 m3u8 地址就下载谁:
+
+- 响应还是老的 `data."0" + data.video_info.src` 结构时, 整个响应体提交给 `/upload-video-info`,
+  沿用 `{文件名主干}-{标题}.{后缀}` 的命名;
+- 其他结构时, 从响应里抽出 m3u8 地址与标题, 提交给 `/upload-video-url`; 标题字段按
+  `file_name`, `video_name`, `title` 等顺序取值, 试看与预览地址会被排除;
+- 只带地址的响应会复用最近 5 分钟内记住的标题, 避免把文件命名成时间戳.
+
+脚本只依赖 Python 标准库. 环境变量 (在 reqable 的全局环境变量里设置即可, 不必改脚本):
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `XESTUDY_SERVER` | `http://127.0.0.1:8010` | 下载服务地址, 也可以写成完整的提交地址 |
+| `XESTUDY_MATCHES` | `xiaoe` | 逗号分隔的 URL 片段, 决定分析哪些响应 |
+| `XESTUDY_STATE_FILE` | 系统临时目录 | 记住标题用的状态文件位置 |
 
 注意 Reqable 的运行器对每个请求都会无条件调用 `onRequest`, 对每个响应无条件调用 `onResponse`,
 所以脚本里两个函数都必须定义, 缺一个就会在调试控制台报 `module 'addons' has no attribute ...`
@@ -45,8 +60,7 @@ just build
 
 ### 抓包诊断
 
-小鹅通客户端换接口后, 下载规则可能不再命中, 日志里只剩下 `接口返回 code=6` 这类探测请求.
-这时用诊断模式把所有 xiaoe 流量收下来分析:
+万一以后又换接口, 用诊断模式把所有 xiaoe 流量收下来分析:
 
 1. 带诊断参数启动服务:
 
@@ -62,7 +76,7 @@ just build
 5. 报告里只有正文摘要, 需要看某个接口的完整请求与响应时按 URL 过滤导出:
 
    ```shell
-   curl -s 'http://127.0.0.1:8010/sniff/records?match=detail_info' | jq '.records[0].response_body'
+   curl -s 'http://127.0.0.1:8010/sniff/records?match=mutli_line' | jq '.records[0].response_body'
    ```
 
 6. 下一轮诊断前清空记录:
@@ -72,6 +86,7 @@ just build
    ```
 
 诊断记录只存在内存里, 单条正文保存上限 64 KiB, 报告里每条记录只保留 512 字节摘要.
+平时用不着诊断, 把那条规则禁用即可, 免得每个请求都多跑一次脚本.
 
 不接 reqable 时, 也可以手工提交一次任务:
 
