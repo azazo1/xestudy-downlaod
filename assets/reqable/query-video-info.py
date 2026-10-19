@@ -1,8 +1,8 @@
 # 小鹅通视频下载 - Reqable 脚本 (Addon)
 #
 # 作用:
-#   抓到 https://app.xiaoe-tech.com/query_video_info 的响应后, 把响应体整体转发给
-#   本机的 xestudy-downlaod 服务, 由服务端解析 m3u8 地址并下载, 解密, 拼接视频.
+#   抓到小鹅通视频信息接口的响应后, 把响应体整体转发给本机的 xestudy-downlaod 服务,
+#   由服务端解析 m3u8 地址并下载, 解密, 拼接视频.
 #
 # 使用步骤:
 #   1. 终端里启动下载服务:
@@ -11,7 +11,9 @@
 #   2. Reqable 菜单 Traffic -> Script -> Enable 打开脚本功能;
 #   3. Traffic -> Script -> Add Rule 新建规则:
 #        规则名:   小鹅通视频下载
-#        匹配 URL: https://app.xiaoe-tech.com/query_video_info
+#        匹配 URL: *video.mu*line*
+#      小鹅通把 multi 写成了 mutli, 这样写两种拼写都能命中; 老接口那条规则
+#      (匹配 https://app.xiaoe-tech.com/query_video_info) 可以继续留着.
 #   4. 把本文件内容整体粘贴到规则脚本编辑区, 保存后即可;
 #   5. 在小鹅通客户端/小程序里播放视频, 服务端会自动收到下载任务.
 #
@@ -19,6 +21,7 @@
 #   - onRequest 与 onResponse 两个入口都必须定义, 运行器会分别无条件调用它们;
 #   - 脚本只依赖 Python 标准库, 无需 pip 安装额外的包;
 #   - onRequest 与 onResponse 运行在不同进程, 本脚本只使用 onResponse;
+#   - 规则匹配地址尽量写窄: 每命中一次都要新起一个 Python 进程, 匹配太宽会让抓包变卡;
 #   - 服务地址默认是本机 8010 端口, 需要改端口时优先用 Reqable 环境变量 XESTUDY_SERVER,
 #     其次才改下面的 SERVER_URL.
 
@@ -31,8 +34,9 @@ import urllib.request
 # 下载服务的提交接口, 端口需与 --bind 一致.
 SERVER_URL = 'http://127.0.0.1:8010/upload-video-info'
 
-# 只处理这个路径的响应.
-TARGET_PATH = '/query_video_info'
+# 处理范围内的路径片段. 小鹅通把 multi 拼成了 mutli (video.mutli_line), 两种写法都收,
+# 万一以后改回 multi_line 也不用动脚本; 规则匹配地址写成 *video.mu*line* 即可, 不必放宽到整个域名.
+TARGET_PATH_HINTS = ('/query_video_info', 'mutli_line', 'multi_line')
 
 # 提交超时时间, 单位秒.
 TIMEOUT = 10.0
@@ -99,10 +103,9 @@ def _describe_request(response):
 
 def onResponse(context, response):
     # 规则本身已经按 URL 匹配, 这里再确认一次路径, 避免规则被改宽后误动作.
-    # 规则被放宽 (例如为了排查而写成 *xiaoe-tech.com*) 时会看到这条提示, 便于发现真实路径.
     path = context.url.split('?', 1)[0]
-    if not path.endswith(TARGET_PATH):
-        print('[xestudy] 规则命中了 %s, 但路径不是 %s, 已跳过' % (path, TARGET_PATH))
+    if not any(hint in path for hint in TARGET_PATH_HINTS):
+        print('[xestudy] 规则命中了 %s, 但路径不在处理范围内, 已跳过' % path)
         return response
 
     try:
