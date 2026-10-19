@@ -65,6 +65,7 @@ func New(options Options, jobs chan<- downloader.Job, logger *slog.Logger) *Serv
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/upload-video-info", s.handleUploadVideoInfo)
+	mux.HandleFunc("/upload-video-url", s.handleUploadVideoURL)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/sniff", s.handleSniff)
 	mux.HandleFunc("/sniff/report", s.handleSniffReport)
@@ -126,7 +127,7 @@ func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request)
 }
 
 // saveMeta 把请求内容原样保存到 {SavePath}/meta/{文件名主干}.json.
-func (s *Server) saveMeta(fileName string, payload model.UploadVideoRequest) error {
+func (s *Server) saveMeta(fileName string, payload any) error {
 	metaDir := filepath.Join(s.options.SavePath, "meta")
 	if err := os.MkdirAll(metaDir, 0o755); err != nil {
 		return fmt.Errorf("创建元数据目录失败: %w", err)

@@ -23,6 +23,7 @@ just build
 | 接口 | 方法 | 说明 |
 | --- | --- | --- |
 | `/upload-video-info` | POST | 接收抓包脚本回传的视频信息并加入下载队列 |
+| `/upload-video-url` | POST | 直接提交 m3u8 地址与文件名, 用于接口结构变化后的适配 |
 | `/healthz` | GET | 存活检查, 确认脚本要提交的地址是否可达 |
 | `/sniff` | POST / DELETE | 接收抓包诊断记录 / 清空记录, 需要 `--sniff` |
 | `/sniff/report` | GET | 查看诊断报告, 需要 `--sniff` |
