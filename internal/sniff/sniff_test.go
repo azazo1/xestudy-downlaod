@@ -133,6 +133,65 @@ func TestRecorderHintWhenNothingFound(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFindsEscapedM3U8(t *testing.T) {
+	cases := map[string]string{
+		"斜杠转义":    `{"data":{"video_info":{"src":"https:\/\/encrypt-k-vod.xet.tech\/drm\/v.f421220.m3u8?sign=abc"}}}`,
+		"unicode": `{"data":{"video_info":{"src":"https:\u002F\u002Fencrypt-k-vod.xet.tech\u002Fdrm\u002Fv.f421220.m3u8?sign=abc"}}}`,
+	}
+
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			verdict := Analyze(Entry{
+				URL:          "https://xestudy.xiaoeknow.com/xe.course.business.video.detail_info.get/2.0.0",
+				ResponseBody: body,
+			})
+			if len(verdict.M3U8URLs) != 1 {
+				t.Fatalf("转义的 m3u8 地址未被识别: %v", verdict.M3U8URLs)
+			}
+			if !strings.HasPrefix(verdict.M3U8URLs[0], "https://encrypt-k-vod.xet.tech/drm/v.f421220.m3u8") {
+				t.Fatalf("还原后的地址异常: %s", verdict.M3U8URLs[0])
+			}
+		})
+	}
+}
+
+func TestRecorderRecordsFilterAndLimit(t *testing.T) {
+	recorder := NewRecorder()
+	now := time.Now()
+
+	recorder.Record(Entry{
+		UID:          "detail",
+		Phase:        PhaseResponse,
+		URL:          "https://xestudy.xiaoeknow.com/xe.course.business.video.detail_info.get/2.0.0",
+		Status:       200,
+		ResponseBody: `{"data":{"video_info":{"src":""}}}`,
+	}, now)
+	recorder.Record(Entry{
+		UID:          "probe",
+		Phase:        PhaseResponse,
+		URL:          "https://app.xiaoe-tech.com/query_video_info",
+		Status:       200,
+		ResponseBody: `{"code":6,"msg":"未找到","data":""}`,
+	}, now)
+
+	if all := recorder.Records("", 0, 50); len(all) != 2 {
+		t.Fatalf("记录数为 %d, 期望 2", len(all))
+	}
+
+	matched := recorder.Records("detail_info", 0, 50)
+	if len(matched) != 1 || matched[0].UID != "detail" {
+		t.Fatalf("按 URL 过滤结果异常: %+v", matched)
+	}
+	if !strings.Contains(matched[0].ResponseBody, "video_info") {
+		t.Fatalf("完整记录里应当带响应正文: %+v", matched[0])
+	}
+
+	limited := recorder.Records("", 1, 50)
+	if len(limited) != 1 || limited[0].UID != "probe" {
+		t.Fatalf("limit 应当保留最近的记录: %+v", limited)
+	}
+}
+
 func TestTruncateKeepsUTF8(t *testing.T) {
 	text := strings.Repeat("中", 100)
 	cut := truncate(text, 10)

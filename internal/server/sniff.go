@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/azazo1/xestudy-downlaod/internal/sniff"
@@ -75,5 +76,40 @@ func (s *Server) handleSniffReport(writer http.ResponseWriter, request *http.Req
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(s.recorder.Report()); err != nil {
 		s.logger.Debug("写入诊断报告失败", "错误", err)
+	}
+}
+
+// defaultSniffRecords 与 maxSniffRecords 限制一次导出的记录条数.
+const (
+	defaultSniffRecords = 50
+	maxSniffRecords     = 500
+)
+
+// handleSniffRecords 输出完整记录, 便于直接查看某个接口的请求与响应正文.
+//
+// 支持 match (按 URL 子串过滤) 与 limit (条数) 两个查询参数.
+func (s *Server) handleSniffRecords(writer http.ResponseWriter, request *http.Request) {
+	if s.recorder == nil {
+		s.writeResponse(writer, http.StatusNotFound, response{Code: 1, Msg: "未启用抓包诊断, 请带 --sniff 启动服务"})
+		return
+	}
+
+	query := request.URL.Query()
+	limit := defaultSniffRecords
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeResponse(writer, http.StatusBadRequest, response{Code: 1, Msg: "limit 必须是正整数"})
+			return
+		}
+		limit = min(parsed, maxSniffRecords)
+	}
+
+	records := s.recorder.Records(query.Get("match"), limit, defaultSniffRecords)
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(map[string]any{"count": len(records), "records": records}); err != nil {
+		s.logger.Debug("写入抓包记录失败", "错误", err)
 	}
 }

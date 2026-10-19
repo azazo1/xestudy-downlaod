@@ -68,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/sniff", s.handleSniff)
 	mux.HandleFunc("/sniff/report", s.handleSniffReport)
+	mux.HandleFunc("/sniff/records", s.handleSniffRecords)
 	return mux
 }
 

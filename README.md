@@ -26,6 +26,7 @@ just build
 | `/healthz` | GET | 存活检查, 确认脚本要提交的地址是否可达 |
 | `/sniff` | POST / DELETE | 接收抓包诊断记录 / 清空记录, 需要 `--sniff` |
 | `/sniff/report` | GET | 查看诊断报告, 需要 `--sniff` |
+| `/sniff/records` | GET | 导出完整记录, 支持 `match` 与 `limit` 参数, 需要 `--sniff` |
 
 ## 配置 reqable
 
@@ -57,7 +58,13 @@ just build
 3. 在小鹅通里点开视频并播放几秒, 服务端日志出现 `发现候选接口` 说明抓到了;
 4. 打开 <http://127.0.0.1:8010/sniff/report> 看报告: `hint` 直接给出规则匹配地址该怎么写,
    `endpoints` 列出各接口是否出现 m3u8, 请求是否带非空 `video_id`;
-5. 下一轮诊断前清空记录:
+5. 报告里只有正文摘要, 需要看某个接口的完整请求与响应时按 URL 过滤导出:
+
+   ```shell
+   curl -s 'http://127.0.0.1:8010/sniff/records?match=detail_info' | jq '.records[0].response_body'
+   ```
+
+6. 下一轮诊断前清空记录:
 
    ```shell
    curl -X DELETE http://127.0.0.1:8010/sniff

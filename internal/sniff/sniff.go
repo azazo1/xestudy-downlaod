@@ -66,9 +66,24 @@ func Analyze(entry Entry) Verdict {
 	}
 
 	verdict.HasVideoInfo = strings.Contains(entry.ResponseBody, "video_info")
-	verdict.M3U8URLs = matchM3U8(entry.ResponseBody)
-	verdict.RequestHasVideoID = verdict.RequestHasVideoID || hasVideoID(entry.RequestBody)
+	// 有些接口会把斜杠转义成 \/ 或 \u002F, 先还原再抽取, 否则 m3u8 地址会被漏掉.
+	verdict.M3U8URLs = matchM3U8(unescapeSlashes(entry.ResponseBody))
+	verdict.RequestHasVideoID = verdict.RequestHasVideoID || hasVideoID(unescapeSlashes(entry.RequestBody))
 	return verdict
+}
+
+// unescapeSlashes 还原 JSON 里被转义的斜杠.
+func unescapeSlashes(text string) string {
+	if !strings.Contains(text, `\`) {
+		return text
+	}
+
+	replacer := strings.NewReplacer(
+		`\/`, `/`,
+		`\u002F`, `/`,
+		`\u002f`, `/`,
+	)
+	return replacer.Replace(text)
 }
 
 // matchM3U8 抽取响应里出现的 m3u8 地址, 去重并限制数量.

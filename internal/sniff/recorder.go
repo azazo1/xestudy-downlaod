@@ -91,6 +91,61 @@ func (r *Recorder) Record(entry Entry, now time.Time) Verdict {
 	return record.Verdict
 }
 
+// RecordDump 是完整记录, 正文按保存上限给出, 用于直接查看某个接口的原始内容.
+type RecordDump struct {
+	UID          string    `json:"uid"`
+	URL          string    `json:"url"`
+	Method       string    `json:"method"`
+	Status       int       `json:"status,omitempty"`
+	Merged       int       `json:"merged"`
+	Verdict      Verdict   `json:"verdict"`
+	RequestBody  string    `json:"request_body,omitempty"`
+	ResponseBody string    `json:"response_body,omitempty"`
+	Truncated    bool      `json:"truncated,omitempty"`
+	LastAt       time.Time `json:"last_at"`
+}
+
+// Records 返回匹配到的最近若干条完整记录, 按时间正序排列.
+//
+// match 为空时返回全部; limit 小于等于 0 时使用 defaultLimit.
+func (r *Recorder) Records(match string, limit int, defaultLimit int) []RecordDump {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+
+	matched := make([]*Record, 0, len(r.order))
+	for _, key := range r.order {
+		record := r.records[key]
+		if match != "" && !strings.Contains(record.Entry.URL, match) {
+			continue
+		}
+		matched = append(matched, record)
+	}
+	if len(matched) > limit {
+		matched = matched[len(matched)-limit:]
+	}
+
+	dumps := make([]RecordDump, 0, len(matched))
+	for _, record := range matched {
+		dumps = append(dumps, RecordDump{
+			UID:          record.Entry.UID,
+			URL:          record.Entry.URL,
+			Method:       record.Entry.Method,
+			Status:       record.Entry.Status,
+			Merged:       record.Merged,
+			Verdict:      record.Verdict,
+			RequestBody:  record.Entry.RequestBody,
+			ResponseBody: record.Entry.ResponseBody,
+			Truncated:    record.Entry.Truncated,
+			LastAt:       record.LastAt,
+		})
+	}
+	return dumps
+}
+
 // Reset 清空全部记录, 便于按一次干净的抓包会话重新分析.
 func (r *Recorder) Reset() {
 	r.mutex.Lock()

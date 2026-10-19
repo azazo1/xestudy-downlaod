@@ -94,6 +94,52 @@ func TestSniffRecordsAndReports(t *testing.T) {
 	}
 }
 
+func TestSniffRecordsEndpoint(t *testing.T) {
+	instance := New(Options{SavePath: t.TempDir(), Concurrent: 4, Sniff: true}, make(chan downloader.Job, 1), quietLogger())
+
+	body, err := json.Marshal(sniff.Entry{
+		UID:          "detail",
+		Phase:        sniff.PhaseResponse,
+		URL:          "https://xestudy.xiaoeknow.com/xe.course.business.video.detail_info.get/2.0.0",
+		Status:       http.StatusOK,
+		ResponseBody: `{"data":{"video_info":{"src":"https:\/\/encrypt-k-vod.xet.tech\/drm\/v.f421220.m3u8?sign=abc"}}}`,
+	})
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	postRecorder := httptest.NewRecorder()
+	instance.Handler().ServeHTTP(postRecorder, httptest.NewRequest(http.MethodPost, "/sniff", strings.NewReader(string(body))))
+	if postRecorder.Code != http.StatusOK {
+		t.Fatalf("记录失败: %d", postRecorder.Code)
+	}
+
+	recorder := httptest.NewRecorder()
+	instance.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sniff/records?match=detail_info", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("导出记录失败: %d", recorder.Code)
+	}
+
+	var payload struct {
+		Count   int                `json:"count"`
+		Records []sniff.RecordDump `json:"records"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("解析记录失败: %v", err)
+	}
+	if payload.Count != 1 || len(payload.Records) != 1 {
+		t.Fatalf("导出条数异常: %+v", payload)
+	}
+	if len(payload.Records[0].Verdict.M3U8URLs) != 1 {
+		t.Fatalf("转义的 m3u8 未被识别: %+v", payload.Records[0].Verdict)
+	}
+
+	badLimit := httptest.NewRecorder()
+	instance.Handler().ServeHTTP(badLimit, httptest.NewRequest(http.MethodGet, "/sniff/records?limit=abc", nil))
+	if badLimit.Code != http.StatusBadRequest {
+		t.Fatalf("非法 limit 时状态码为 %d, 期望 400", badLimit.Code)
+	}
+}
+
 func TestSniffDisabledByDefault(t *testing.T) {
 	instance := New(Options{SavePath: t.TempDir(), Concurrent: 4}, make(chan downloader.Job, 1), quietLogger())
 
