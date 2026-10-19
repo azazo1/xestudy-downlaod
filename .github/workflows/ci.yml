@@ -148,6 +148,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: 准备 uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
       # 只报告不修改: CI 里改写工作区会让后续步骤看到与提交不符的内容.
       - name: 检查格式
         shell: bash
@@ -171,6 +176,12 @@ jobs:
         run: |
           set -euo pipefail
           go test ./... -count=1
+
+      # reqable 脚本没法在 CI 里真跑抓包, 用替身模块按运行器的方式调用两个入口,
+      # 顺带断言提交内容. 脚本与平台无关, 跑一份就够.
+      - name: 检查 reqable 脚本
+        if: matrix.os == 'ubuntu-24.04'
+        run: uv run --no-project python scripts/check-reqable-script.py
 
   # 依赖链在 Linux 上含 cgo: go list 会列出 runtime/cgo 与 net, 交叉编译出来的
   # 产物会绑定构建机的系统库, 所以按原生 runner 矩阵逐个目标构建, 每份都真跑

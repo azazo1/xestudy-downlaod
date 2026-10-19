@@ -35,6 +35,10 @@ just build
 脚本只依赖 Python 标准库. 需要改服务地址时, 优先在 reqable 的全局环境变量里设置 `XESTUDY_SERVER`,
 其次才改脚本里的 `SERVER_URL`.
 
+注意 Reqable 的运行器对每个请求都会无条件调用 `onRequest`, 对每个响应无条件调用 `onResponse`,
+所以脚本里两个函数都必须定义, 缺一个就会在调试控制台报 `module 'addons' has no attribute ...`
+并让脚本以退出码 1 结束.
+
 不接 reqable 时, 也可以手工提交一次任务:
 
 ```shell
@@ -75,6 +79,7 @@ curl -X POST http://127.0.0.1:8010/upload-video-info \
 | `just serve` | 前台启动服务, 保存到 `./videos` |
 | `just test` | 运行单元测试, 不访问外网 |
 | `just smoke` | 端到端自检: 起假视频源, 提交任务并校验成片 |
+| `just check-reqable` | 检查 reqable 脚本的入口与提交行为, 不需要安装 reqable |
 | `just vet` | 静态检查 |
 | `just fmt` | 代码格式化 |
 

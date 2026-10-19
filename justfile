@@ -31,6 +31,10 @@ test:
 smoke:
     uv run --no-project python scripts/smoke-test.py
 
+# 检查 reqable 抓包脚本的入口与提交行为, 不需要安装 reqable.
+check-reqable:
+    uv run --no-project python scripts/check-reqable-script.py
+
 # 静态检查.
 vet:
     go vet ./...

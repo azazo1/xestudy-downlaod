@@ -16,6 +16,7 @@
 #   5. 在小鹅通客户端/小程序里播放视频, 服务端会自动收到下载任务.
 #
 # 说明:
+#   - onRequest 与 onResponse 两个入口都必须定义, 运行器会分别无条件调用它们;
 #   - 脚本只依赖 Python 标准库, 无需 pip 安装额外的包;
 #   - onRequest 与 onResponse 运行在不同进程, 本脚本只使用 onResponse;
 #   - 服务地址默认是本机 8010 端口, 需要改端口时优先用 Reqable 环境变量 XESTUDY_SERVER,
@@ -56,6 +57,13 @@ def _submit(address, payload):
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
         return response.status, response.read().decode('utf-8', 'replace')
+
+
+def onRequest(context, request):
+    # Reqable 的脚本运行器对每个请求都会无条件调用 onRequest, 所以即使这里什么都不做
+    # 也必须定义, 否则会抛 "module 'addons' has no attribute 'onRequest'" 并以退出码 1 结束.
+    # 下载所需的视频信息在响应里, 因此这里只原样放行.
+    return request
 
 
 def onResponse(context, response):
