@@ -1,0 +1,3 @@
+# 统一按 LF 检出: Windows runner 上 core.autocrlf 会把文本文件转成 CRLF,
+# 于是 gofmt 会把所有 .go 文件判为未格式化.
+* text=auto eol=lf

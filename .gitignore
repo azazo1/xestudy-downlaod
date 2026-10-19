@@ -1,0 +1,17 @@
+# Go 构建产物与测试产物.
+/bin/
+/dist/
+*.test
+*.out
+coverage.out
+
+# 发布脚本运行产生的 Python 字节码.
+__pycache__/
+*.pyc
+
+# 下载输出.
+/videos/
+/downloads/
+
+# 本地临时文件.
+/.tmp/

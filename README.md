@@ -1,0 +1,110 @@
+# 小鹅通视频下载工具 (Go)
+
+配合 Reqable 抓包使用的小鹅通视频下载服务, 对应的 Rust 版本为 `xestudy-video-download`.
+
+原理: Reqable 抓到 <https://app.xiaoe-tech.com/query_video_info> 的响应, 由抓包脚本把响应体转发给本服务;
+服务从响应里取出 `data.video_info.src` 指向的 m3u8 地址与 `data."0"` 中的文件名/标题,
+并发下载分片, 按需做 AES-128-CBC 解密, 最后拼接成完整视频.
+
+## 快速开始
+
+```shell
+# 1. 构建
+just build
+
+# 2. 启动下载服务, 视频保存到 ./videos
+./bin/xestudy-downlaod --savepath ./videos --debug
+
+# 3. 按下一节配置 reqable, 然后在客户端里播放视频
+```
+
+服务默认监听 `0.0.0.0:8010`, 接口:
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/upload-video-info` | POST | 接收抓包脚本回传的视频信息并加入下载队列 |
+| `/healthz` | GET | 存活检查, 确认脚本要提交的地址是否可达 |
+
+## 配置 reqable
+
+1. 打开 reqable 的脚本功能: 菜单 `Traffic` -> `Script` -> `Enable`;
+2. 新建规则: `Traffic` -> `Script` -> `Add Rule`, 匹配地址填 `https://app.xiaoe-tech.com/query_video_info`;
+3. 把 [query-video-info.py](assets/reqable/query-video-info.py) 的内容整体粘贴到规则脚本编辑区, 保存;
+4. 在小鹅通客户端或小程序里播放视频, 服务端日志出现 `收到下载请求` 即为成功.
+
+脚本只依赖 Python 标准库. 需要改服务地址时, 优先在 reqable 的全局环境变量里设置 `XESTUDY_SERVER`,
+其次才改脚本里的 `SERVER_URL`.
+
+不接 reqable 时, 也可以手工提交一次任务:
+
+```shell
+curl -X POST http://127.0.0.1:8010/upload-video-info \
+  -H 'Content-Type: application/json' \
+  --data @assets/samples/upload-video-info.sample.json
+```
+
+## 命令行参数
+
+| 参数 | 简写 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--bind` | `-b` | `0.0.0.0:8010` | 服务监听地址 |
+| `--savepath` | `-s` | 用户下载目录 | 视频保存目录, 支持 `~` 开头 |
+| `--concurrent` | `-c` | `12` | 单个视频的分片下载并发数 |
+| `--queue-size` | | `100` | 等待下载的任务数量上限 |
+| `--ffmpeg` | | 关闭 | 使用 ffmpeg 拼接分片, 默认直接拼接字节流 |
+| `--debug` | | 关闭 | 输出 debug 级别日志 |
+
+## 输出目录
+
+```text
+<savepath>/
+- meta/       # 抓包回传的原始信息, 便于回溯下载来源
+- segments/   # 分片, 每个视频一个子目录, 按 00000.ts 顺序命名
+- videos/     # 拼接完成的成片
+```
+
+分片保存在 `segments` 下, 因此中断后重新触发同一个视频即可续传, 已下载的分片不会被重复请求.
+只有当全部分片都下载成功时才会拼接成片, 避免产出内容不完整的视频.
+
+## 开发
+
+| 命令 | 说明 |
+| --- | --- |
+| `just deps` | 拉取依赖 |
+| `just build` | 构建二进制到 `bin/` |
+| `just serve` | 前台启动服务, 保存到 `./videos` |
+| `just test` | 运行单元测试, 不访问外网 |
+| `just smoke` | 端到端自检: 起假视频源, 提交任务并校验成片 |
+| `just vet` | 静态检查 |
+| `just fmt` | 代码格式化 |
+
+代码结构:
+
+```text
+cmd/xestudy-downlaod/         # 程序入口
+internal/cli/                 # 命令行参数, 服务启动与优雅退出
+internal/config/              # 运行参数与默认值
+internal/server/              # HTTP 接口, 元数据落盘, 任务入队
+internal/downloader/          # 分片下载, 解密, 拼接
+internal/hls/                 # m3u8 解析
+internal/naming/              # 视频文件名组合与净化
+internal/model/               # 抓包回传的 JSON 结构
+internal/logging/             # 日志初始化
+assets/reqable/               # reqable 抓包脚本
+assets/samples/               # 提交接口的示例请求体
+scripts/                      # 端到端自检与发布脚本
+docs/changelog/               # 各版本的发布说明
+```
+
+## 与 Rust 版的差异
+
+- 日志改用标准库 `log/slog`, 关键阶段都有结构化日志;
+- 启动时会先监听端口再进入服务循环, 端口占用能立刻报错而不是进到服务里才发现;
+- 收到 Ctrl+C 时先停止接收新任务并等待当前任务结束, 再按一次则立即取消下载;
+- 未显式给出 IV 时按 HLS 规范用分片序号推导, 而不是直接用全零 IV;
+- 只要有分片下载失败就不生成成片, 避免得到内容残缺的视频;
+- 文件名净化会顺带处理空文件名, 超长文件名与结尾的非法字符.
+
+## 说明
+
+下载到的视频仅供个人学习使用, 请遵守课程平台的服务条款.
