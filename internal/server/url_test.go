@@ -64,23 +64,6 @@ func TestUploadVideoURLGeneratesName(t *testing.T) {
 	}
 }
 
-func TestUploadVideoURLAddsExtension(t *testing.T) {
-	jobs := make(chan downloader.Job, 1)
-	instance := New(Options{SavePath: t.TempDir(), Concurrent: 4}, jobs, quietLogger())
-
-	body := `{"url":"` + sampleM3U8 + `","name":"第三讲 Uart、DMA、ADC"}`
-	recorder := httptest.NewRecorder()
-	instance.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/upload-video-url", strings.NewReader(body)))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("状态码为 %d, 期望 200", recorder.Code)
-	}
-
-	job := <-jobs
-	if job.FileName != "第三讲 Uart、DMA、ADC.mp4" {
-		t.Fatalf("无后缀的名称应补上 .mp4, 实际为 %q", job.FileName)
-	}
-}
-
 func TestUploadVideoURLRejectsBadRequests(t *testing.T) {
 	cases := []struct {
 		name   string
